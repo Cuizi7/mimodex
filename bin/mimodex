@@ -1,0 +1,182 @@
+#!/bin/bash
+# mimodex — 让 Codex CLI 用小米 MiMo 后端跑，并让 auto-approve 真正生效
+#
+#   mimodex                     启动 codex（MiMo 后端），参数与 codex 完全一致
+#   mimodex exec "..."          非交互执行
+#   mimodex proxy start         启动本地适配代理
+#   mimodex proxy stop|restart|status|logs|run
+#   mimodex check               自检环境与依赖
+#   mimodex version
+#
+# 设计约束：**绝不改写 ~/.codex/config.toml**。
+# 普通 codex 与 ChatGPT 桌面 App 读到的仍是它们原本的配置；
+# MiMo 相关的 model / provider / catalog 全部通过 codex 的 -c 在启动时注入。
+set -uo pipefail
+
+# ---- 定位项目根目录（自身可能是 ~/.local/bin 下的符号链接）----
+SELF="$0"
+while [ -L "$SELF" ]; do
+  _t="$(readlink "$SELF")"
+  case "$_t" in
+    /*) SELF="$_t" ;;
+    *)  SELF="$(dirname "$SELF")/$_t" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd -P)"
+ROOT="${MIMODEX_HOME:-$ROOT}"
+
+PROXY_JS="$ROOT/proxy/proxy.mjs"
+CONFIG_JSON="$ROOT/config.json"
+PIDFILE="$ROOT/proxy.pid"
+LOGFILE="$ROOT/proxy.log"
+
+PORT="${MIMODEX_PORT:-8787}"
+HEALTH="http://127.0.0.1:${PORT}/healthz"
+TOKEN_FILE="${MIMODEX_TOKEN_FILE:-$HOME/.codex/mimodex-token}"
+CATALOG="${MIMODEX_CATALOG:-$HOME/.codex/model-catalog-mimo.json}"
+MODEL="${MIMODEX_MODEL:-mimo-v2.6-pro}"
+CONTEXT_WINDOW="${MIMODEX_CONTEXT_WINDOW:-1048576}"
+AUTO_COMPACT="${MIMODEX_AUTO_COMPACT:-838860}"
+
+die() { echo "mimodex: $*" >&2; exit 1; }
+note() { echo "mimodex: $*" >&2; }
+
+usage() {
+  sed -n '2,14p' "$SELF" | sed 's/^# \{0,1\}//'
+}
+
+proxy_running() {
+  [ -f "$PIDFILE" ] || return 1
+  local pid
+  pid="$(cat "$PIDFILE" 2>/dev/null)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  echo "$pid"
+}
+
+# ---------------- proxy 子命令 ----------------
+proxy_cmd() {
+  local sub="${1:-status}"
+  case "$sub" in
+    start)
+      if pid="$(proxy_running)"; then
+        echo "代理已在运行 (pid $pid)"
+        return 0
+      fi
+      [ -f "$PROXY_JS" ] || die "找不到 $PROXY_JS"
+      [ -f "$CONFIG_JSON" ] || die "找不到 ${CONFIG_JSON}（从 config.example.json 复制一份）"
+      command -v node >/dev/null 2>&1 || die "PATH 里没有 node"
+      cd "$ROOT" || die "无法进入 $ROOT"
+      nohup node "$PROXY_JS" >>"$LOGFILE" 2>&1 &
+      echo $! >"$PIDFILE"
+      sleep 0.7
+      if pid="$(proxy_running)"; then
+        echo "代理已启动 (pid $pid) -> http://127.0.0.1:${PORT}"
+        echo "日志: $LOGFILE"
+      else
+        rm -f "$PIDFILE"
+        die "启动失败，请看 $LOGFILE"
+      fi
+      ;;
+    stop)
+      if pid="$(proxy_running)"; then
+        kill "$pid" 2>/dev/null
+        for _ in $(seq 1 30); do
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.1
+        done
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+        rm -f "$PIDFILE"
+        echo "代理已停止"
+      else
+        rm -f "$PIDFILE"
+        echo "代理未在运行"
+      fi
+      ;;
+    restart) proxy_cmd stop; proxy_cmd start ;;
+    status)
+      if pid="$(proxy_running)"; then echo "进程: 运行中 (pid $pid)"; else echo "进程: 未运行"; fi
+      if command -v curl >/dev/null 2>&1; then
+        if out="$(curl -fsS -m 5 "$HEALTH" 2>/dev/null)"; then
+          echo "探活: OK  $out"
+        else
+          echo "探活: 失败 ($HEALTH)"
+        fi
+      fi
+      echo "目录: $ROOT"
+      ;;
+    logs)
+      [ -f "$LOGFILE" ] || die "还没有日志 $LOGFILE"
+      if [ "${2:-}" = "-f" ]; then tail -f "$LOGFILE"; else tail -n "${2:-50}" "$LOGFILE"; fi
+      ;;
+    run)
+      cd "$ROOT" || die "无法进入 $ROOT"
+      exec node "$PROXY_JS"
+      ;;
+    help|-h|--help) usage ;;
+    *) die "未知的 proxy 子命令：${sub}（可用 start|stop|restart|status|logs|run）" ;;
+  esac
+}
+
+# ---------------- 自检 ----------------
+check_cmd() {
+  local ok=0
+  printf '  %-22s' "node"; if command -v node >/dev/null 2>&1; then echo "✅ $(node --version)"; else echo "❌ 未安装"; ok=1; fi
+  printf '  %-22s' "codex"; if command -v codex >/dev/null 2>&1; then echo "✅ $(codex --version 2>/dev/null | tail -1)"; else echo "❌ 未安装"; ok=1; fi
+  printf '  %-22s' "代理脚本"; [ -f "$PROXY_JS" ] && echo "✅ $PROXY_JS" || { echo "❌ 缺失"; ok=1; }
+  printf '  %-22s' "运行时配置"; [ -f "$CONFIG_JSON" ] && echo "✅ $CONFIG_JSON" || { echo "❌ 缺失（复制 config.example.json）"; ok=1; }
+  printf '  %-22s' "模型目录"; [ -f "$CATALOG" ] && echo "✅ $CATALOG" || { echo "❌ 缺失 $CATALOG"; ok=1; }
+  printf '  %-22s' "凭据文件"; if [ -r "$TOKEN_FILE" ]; then echo "✅ $TOKEN_FILE"; else echo "❌ 读不到 $TOKEN_FILE"; ok=1; fi
+  printf '  %-22s' "代理探活"; if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then echo "✅ 已就绪"; else echo "⚠️  未运行（mimodex proxy start）"; fi
+  return $ok
+}
+
+# ---------------- 启动 codex ----------------
+launch() {
+  # 1) 代理必须活着；不在就拉起
+  if ! curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then
+    note "代理未响应，正在启动…"
+    proxy_cmd start >&2 || die "代理启动失败，请看 $LOGFILE"
+    for _ in $(seq 1 24); do
+      curl -fsS -m 2 "$HEALTH" >/dev/null 2>&1 && break
+      sleep 0.25
+    done
+    curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1 || die "代理启动后仍不可用，请看 $LOGFILE"
+    note "代理已就绪 (127.0.0.1:${PORT})"
+  fi
+
+  # 2) 凭据只从文件读，经环境变量传给 codex，不进 argv（ps 里看不到）
+  [ -r "$TOKEN_FILE" ] || die "读不到凭据文件 ${TOKEN_FILE}（把 MiMo API key 写进去，或跑 install.sh）"
+  MIMO_API_KEY="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  [ -n "$MIMO_API_KEY" ] || die "凭据文件 $TOKEN_FILE 是空的"
+  export MIMO_API_KEY
+
+  [ -r "$CATALOG" ] || die "读不到模型目录 $CATALOG"
+
+  # 3) -c 覆盖启动。共享 config.toml 一字不改。
+  #    注意：顶层 model_context_window / model_auto_compact_token_limit 会盖过
+  #    catalog 声明的值，故必须一并覆盖，否则窗口会沿用共享配置里的旧值。
+  exec codex \
+    -c "model=\"$MODEL\"" \
+    -c 'model_provider="mimo"' \
+    -c "model_catalog_json=\"$CATALOG\"" \
+    -c 'web_search="disabled"' \
+    -c "model_context_window=${CONTEXT_WINDOW}" \
+    -c "model_auto_compact_token_limit=${AUTO_COMPACT}" \
+    -c 'model_providers.mimo.name="mimo"' \
+    -c "model_providers.mimo.base_url=\"http://127.0.0.1:${PORT}/v1\"" \
+    -c 'model_providers.mimo.wire_api="responses"' \
+    -c 'model_providers.mimo.env_key="MIMO_API_KEY"' \
+    -c 'model_providers.mimo.supports_websockets=false' \
+    -c 'model_providers.mimo.websocket_connect_timeout_ms=1000' \
+    "$@"
+}
+
+case "${1:-}" in
+  proxy)   shift; proxy_cmd "$@" ;;
+  check)   shift; check_cmd ;;
+  version|-V|--version)
+    printf 'mimodex %s\n' "$(cat "$ROOT/VERSION" 2>/dev/null || echo '(no VERSION)')" ;;
+  help|-h|--help) usage ;;
+  *)       launch "$@" ;;
+esac

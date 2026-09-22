@@ -1,0 +1,27 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "upstream": "https://token-plan-cn.xiaomimimo.com/v1",
+
+  "model_map": {
+    "codex-auto-review": "mimo-v2.6-flash",
+    "gpt-5.6-luna": "mimo-v2.6-flash",
+    "gpt-5.6-terra": "mimo-v2.6-flash",
+    "gpt-5.6-sol": "mimo-v2.6-pro",
+    "gpt-6-astra": "mimo-v2.6-pro",
+    "gpt-5.5": "mimo-v2.6-pro",
+    "gpt-reserve": "mimo-v2.6-pro"
+  },
+
+  "model_map_globs": {
+    "gpt-*": "mimo-v2.6-pro"
+  },
+
+  "effort_map": {
+    "minimal": "low",
+    "xhigh": "high",
+    "max": "high"
+  },
+
+  "default_model": null
+}
