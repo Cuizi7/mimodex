@@ -57,7 +57,7 @@ grep -rniE 'tp-[a-z0-9]{20,}|sk-[a-z0-9]{20,}|bearer [a-z0-9]{20,}' --exclude-di
 
 ### 4. 不得缓冲 SSE
 
-Codex 发 `stream: true` 并期望真正的增量 SSE。必须用 `pipeline(Readable.fromWeb(...), res)` 逐块透传，且必须让上游的 `response.completed` 原样到达。缓冲或截断会让 codex 报：
+Codex 发 `stream: true` 并期望真正的增量 SSE。必须用 `pipeline(upstreamRes, res)` 逐块透传（`upstreamRes` 是 `https.request` 的 `IncomingMessage`），且必须让上游的 `response.completed` 原样到达。缓冲或截断会让 codex 报：
 
 ```
 stream disconnected before completion: stream closed before response.completed
@@ -69,13 +69,24 @@ stream disconnected before completion: stream closed before response.completed
 
 状态码与 body 都要原样转发，不包装、不吞掉。这个项目本身就是从「报错只说 `No such file or directory` 却不说哪个文件」的痛苦里长出来的 —— 不要再制造同类体验。
 
+### 6. 上游连接必须走显式 `https.Agent`，不要改回 `fetch`
+
+**这是硬性约束，不是风格偏好。** 早期版本用全局 `fetch`（undici），在长驻进程里会塌缩到单条上游连接，所有请求串行排队。实测同一份请求的 6 并发总墙钟：直连 1.03s / 全新代理进程 1.03s / 劣化后的长驻进程 **37.6s**（采样期间上游 443 连接数恒为 `1`）。
+
+改动转发层时：
+
+- 用 `node:https.request` + 显式 `https.Agent`，保留 `maxSockets` / `keepAlive` / `timeout` 三项配置
+- **保留 `sockWaitMs`、`connectMs`、`ttfbMs` 三个日志字段与 `/healthz` 的 `agent`/`metrics` 段** —— 它们是判断「代理慢还是上游慢」的唯一依据，没有它们这个故障只能靠猜
+- 请求侧继续去掉 `accept-encoding`：`https.request` 不解压响应，保持正文未压缩最可预测
+- 改完必须验证：6 并发墙钟应与直连同量级，且 `/healthz` 的 `queuedRequests` 保持 0
+
 ---
 
 ## 架构与文件
 
 ```
 bin/mimodex            单一入口。无参数=启动 codex；proxy/check/version/help 为自定义子命令，其余透传
-proxy/proxy.mjs        代理本体。零依赖，node:http + 全局 fetch
+proxy/proxy.mjs        代理本体。零依赖，node:http + node:https（显式 Agent，见不变量 6）
 config.example.json    运行时配置模板（config.json 由安装脚本生成，不入库）
 install.sh             安装：生成配置 + 写凭据 + 链接命令 + 打模型目录补丁
 tools/patch-catalog.py 模型目录补丁（幂等，自动备份）

@@ -23,5 +23,15 @@
     "max": "high"
   },
 
-  "default_model": null
+  "default_model": null,
+
+  "//连接管理": "上游用显式 Agent，不要改回内置 fetch —— 见 README「连接管理」一节",
+  "max_sockets": 64,
+  "max_free_sockets": 16,
+  "keep_alive_msecs": 30000,
+  "upstream_timeout_ms": 300000,
+
+  "//可观测性": "sockWait 超过该阈值会打 WARN；stats 是周期性连接池快照的间隔",
+  "socket_wait_warn_ms": 1000,
+  "stats_interval_ms": 30000
 }
