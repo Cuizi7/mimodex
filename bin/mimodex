@@ -1,7 +1,7 @@
 #!/bin/bash
 # mimodex — 让 Codex CLI 用小米 MiMo 后端跑，并让 auto-approve 真正生效
 #
-#   mimodex                     启动 codex（MiMo 后端），参数与 codex 完全一致
+#   mimodex                     启动 codex（MiMo 后端），其余参数原样透传给 codex
 #   mimodex exec "..."          非交互执行
 #   mimodex proxy start         启动本地适配代理
 #   mimodex proxy stop|restart|status|logs|run
@@ -42,7 +42,20 @@ die() { echo "mimodex: $*" >&2; exit 1; }
 note() { echo "mimodex: $*" >&2; }
 
 usage() {
-  sed -n '2,14p' "$SELF" | sed 's/^# \{0,1\}//'
+  sed -n '2,13p' "$SELF" | sed 's/^# \{0,1\}//'
+}
+
+# 顶层 help 追加 codex 原生帮助：动态取自本机 codex，随 codex 版本自动更新，
+# 不在 mimodex 里复制一份选项清单（会随版本漂移）。mimodex 只占用
+# proxy / check / version / help 这几个名字，其余参数与子命令全部原样透传。
+codex_usage() {
+  command -v codex >/dev/null 2>&1 || { note "PATH 里没有 codex，跳过其原生帮助"; return 0; }
+  echo
+  echo "---- 以下为 codex 原生帮助（mimodex 透传给 codex 的参数与子命令）----"
+  echo "mimodex 只占用 proxy / check / version / help，其余参数与子命令原样透传给 codex；"
+  echo "各子命令的详细帮助可用 mimodex <子命令> --help 查看（同样透传给 codex）。"
+  echo
+  codex --help
 }
 
 proxy_running() {
@@ -179,6 +192,6 @@ case "${1:-}" in
   check)   shift; check_cmd ;;
   version|-V|--version)
     printf 'mimodex %s\n' "$(cat "$ROOT/VERSION" 2>/dev/null || echo '(no VERSION)')" ;;
-  help|-h|--help) usage ;;
+  help|-h|--help) usage; codex_usage ;;
   *)       launch "$@" ;;
 esac
