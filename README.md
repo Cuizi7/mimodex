@@ -1,22 +1,55 @@
 # mimodex
 
-在 Codex CLI 中使用小米 MiMo 后端，并恢复 auto-approve。
+在 Codex CLI 中使用小米 MiMo 后端。
 
-零依赖本地代理 + 启动器。不修改 `~/.codex/config.toml`，普通 `codex` 与 ChatGPT 桌面 App 不受影响。
+零依赖本地代理 + 启动器。不修改 `~/.codex/config.toml`。
 
-## 背景
+## 解决的问题
 
-Codex 自 2026-02 移除 `wire_api = "chat"`，仅支持 Responses API（[Discussion #7782](https://github.com/openai/codex/discussions/7782)）。MiMo 网关的 Responses 实现缺少三项能力：
+### 1. 支持 auto-approval
 
-| 缺口 | 影响 |
+Codex 的 auto-review 由 guardian 子代理执行，其判定调用要求 `json_schema` 结构化输出。MiMo 的 Responses 端点只接受 `text` 与 `json_object`：
+
+```
+HTTP 400  responses_feature_not_supported:
+text.format type 'json_schema' is not supported, only 'text' and 'json_object' are allowed.
+```
+
+而 Codex 在此处是 fail-closed —— 越权命令会被判为「不可接受的风险」直接拒绝，而不是退回人工确认：
+
+```
+This action was rejected due to unacceptable risk.
+Reason: Automatic approval review failed: ...
+```
+
+结果是所有越权命令全部被拒，agent 只能困在沙箱内。代理将 `json_schema` 降级为 `json_object`，审查恢复正常。
+
+### 2. 模型映射，无需修改 agents 配置
+
+`~/.codex/agents/*.toml` 中声明的模型名（`gpt-5.6-luna`、`gpt-5.6-terra`、`gpt-6-astra` 等）在 MiMo 上返回 `400 Unsupported model`，explorer / reviewer / implementer 等子代理无法启动。
+
+代理在转发时按映射表改写模型名：
+
+```
+gpt-5.6-luna  → mimo-v2.6-flash
+gpt-5.6-terra → mimo-v2.6-flash
+gpt-6-astra   → mimo-v2.6-pro
+```
+
+因此 agents 配置无需改动，同一份定义可同时用于 OpenAI 与 MiMo 两套后端。
+
+### 3. 配置隔离，可与 GPT 系列共用
+
+mimodex 不写入 `~/.codex/config.toml`。MiMo 的模型、provider 与 catalog 配置通过 `codex -c` 在启动时注入，不落盘。
+
+| 命令 | 后端 |
 | --- | --- |
-| 不支持 `json_schema` 结构化输出 | auto-review 调用失败，且 fail-closed：越权命令被判为不可接受的风险直接拒绝，而非退回人工确认 |
-| 不识别 `gpt-*` 模型名 | `~/.codex/agents/*.toml` 声明的模型全部返回 `400 Unsupported model` |
-| 推理档位止于 `high` | agent 配置中的 `max` / `xhigh` 行为未定义 |
+| `codex` / ChatGPT 桌面 App | 原有配置（GPT 系列） |
+| `mimodex` | MiMo |
 
-mimodex 在请求体层面补齐这三项，不涉及协议转换。
+API key 经环境变量传递，不出现在命令行参数中。
 
-## 工作原理
+## 原理
 
 ```
 codex ──▶ mimodex proxy (127.0.0.1:8787) ──▶ MiMo 网关
@@ -26,7 +59,9 @@ codex ──▶ mimodex proxy (127.0.0.1:8787) ──▶ MiMo 网关
              └─ ③ body.reasoning.effort     max / xhigh → high
 ```
 
-响应按 SSE 逐块透传，不做改写。上游错误原样透传状态码与响应体。
+代理只改写请求体中的上述三个字段，响应按 SSE 逐块透传。上游错误原样透传状态码与响应体。
+
+不做协议转换 —— MiMo 原生支持 Responses API，仅这三项存在差异。
 
 ## 安装
 
@@ -46,7 +81,7 @@ bash install.sh          # 交互式输入 MiMo API key
 python3 tools/patch-catalog.py ~/.codex/model-catalog-mimo.json
 ```
 
-补丁为所有条目补充 `max` / `xhigh` 档位、将 `auto_review_model_override` 指向成本更低的模型、并添加 `gpt-*` 别名条目。操作幂等且自动备份。
+补丁为所有条目补充 `max` / `xhigh` 推理档位、将审查模型指向成本更低的模型、并添加 `gpt-*` 别名条目。操作幂等且自动备份。
 
 ## 使用
 
@@ -61,17 +96,6 @@ mimodex check                 # 环境自检
 ```
 
 仅占用 `proxy` / `check` / `version` / `help` 四个子命令，其余参数原样透传给 `codex`。
-
-## 配置隔离
-
-mimodex 不写入 `~/.codex/config.toml`。MiMo 的 `model`、`model_provider`、`model_catalog_json` 及 provider 定义均通过 `codex -c` 在启动时注入，不落盘。
-
-| 命令 | 后端 |
-| --- | --- |
-| `codex` / ChatGPT 桌面 App | 原有配置 |
-| `mimodex` | MiMo |
-
-API key 经环境变量 `MIMO_API_KEY` 传递（provider 以 `env_key` 引用），不出现在命令行参数中。
 
 ## 配置项
 
@@ -108,7 +132,7 @@ API key 经环境变量 `MIMO_API_KEY` 传递（provider 以 `env_key` 引用）
 | `effortIn` → `effortOut` | 档位 clamp 结果 |
 | `status` / `ms` | 上游状态码与耗时（499 表示客户端提前断开） |
 
-**确认 auto-approve 生效**：日志中应存在 `fmtDowngrade: true` 且 `status: 200` 的记录。若为 `400` 且消息含 `json_schema`，说明降级未生效。
+**确认 auto-approval 生效**：日志中应存在 `fmtDowngrade: true` 且 `status: 200` 的记录。若为 `400` 且消息含 `json_schema`，说明降级未生效。
 
 **上下文窗口异常**：`model_context_window` 为顶层配置项，会覆盖模型目录中的声明值，mimodex 默认覆盖为 `1048576`。实际生效值只出现在会话日志中：
 
