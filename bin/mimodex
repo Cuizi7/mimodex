@@ -67,7 +67,9 @@ proxy_cmd() {
       [ -f "$CONFIG_JSON" ] || die "找不到 ${CONFIG_JSON}（从 config.example.json 复制一份）"
       command -v node >/dev/null 2>&1 || die "PATH 里没有 node"
       cd "$ROOT" || die "无法进入 $ROOT"
-      nohup node "$PROXY_JS" >>"$LOGFILE" 2>&1 &
+      # 显式传入配置与日志路径：仓库布局下它们在根目录，而代理脚本在 proxy/ 下
+      MIMO_PROXY_CONFIG="$CONFIG_JSON" MIMO_PROXY_LOG="$LOGFILE" \
+        nohup node "$PROXY_JS" >>"$LOGFILE" 2>&1 &
       echo $! >"$PIDFILE"
       sleep 0.7
       if pid="$(proxy_running)"; then
@@ -111,7 +113,7 @@ proxy_cmd() {
       ;;
     run)
       cd "$ROOT" || die "无法进入 $ROOT"
-      exec node "$PROXY_JS"
+      MIMO_PROXY_CONFIG="$CONFIG_JSON" MIMO_PROXY_LOG="$LOGFILE" exec node "$PROXY_JS"
       ;;
     help|-h|--help) usage ;;
     *) die "未知的 proxy 子命令：${sub}（可用 start|stop|restart|status|logs|run）" ;;

@@ -146,6 +146,8 @@ mimodex exec "say OK"                            # 端到端联通
 
 > 注：本节上面那行刻意保留了错误写法作为反面示例，因此对 `AGENTS.md` 做 `$VAR` 扫描时会出现一条预期内的命中；扫描真实代码时请排除本文件。
 
+**配置与日志的查找路径要与目录布局一致。** 仓库布局是 `proxy/proxy.mjs` + 根目录 `config.json`，而代理默认按 `__dirname` 找配置 —— 只认 `__dirname` 会让 clone 下来的用户**直接启动失败**（本地测试若把两者放同一目录就发现不了）。查找顺序是：`MIMO_PROXY_CONFIG` → CWD → `__dirname` → `__dirname/..`；日志默认与配置同目录。`bin/mimodex` 启动代理时显式传入这两个路径。
+
 **Codex 会把顶层 `model_context_window` 当作对 catalog 的覆盖。** 共享配置里的值会盖过模型目录声明的上下文窗口，所以 `bin/mimodex` 必须显式覆盖它，否则窗口会静默沿用旧值。这个数在 codex UI 里看不到，只能从会话日志的 `token_count` 事件读。
 
 **`-c` 覆盖不会落盘，但 codex 仍会重写 `config.toml`。** 会话结束时它可能把文件重写一遍（落盘 `[projects.*]` / `[hooks.state.*]` 等它自己管理的条目）。内容通常不变，但这就意味着**外部工具（如桌面 App）也能通过这条通路写入 `model`** —— 排查「配置莫名被改」时别只怀疑 mimodex。

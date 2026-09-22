@@ -35,7 +35,22 @@ import { pipeline } from 'node:stream/promises';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─────────────────────────── 配置 ───────────────────────────
-const CONFIG_PATH = process.env.MIMO_PROXY_CONFIG || path.join(__dirname, 'config.json');
+// 查找顺序：显式环境变量 → 当前目录 → 脚本目录 → 仓库根（proxy/ 的上一级）。
+// 最后一项是必需的：仓库布局里 config.json 在根目录，而本文件在 proxy/ 下，
+// 只认 __dirname 会让 clone 下来的用户直接启动失败。
+function resolveConfigPath() {
+  if (process.env.MIMO_PROXY_CONFIG) return process.env.MIMO_PROXY_CONFIG;
+  const candidates = [
+    path.join(process.cwd(), 'config.json'),
+    path.join(__dirname, 'config.json'),
+    path.join(__dirname, '..', 'config.json'),
+  ];
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch { /* ignore */ }
+  }
+  return candidates[1];
+}
+const CONFIG_PATH = resolveConfigPath();
 let cfg;
 try {
   cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -47,7 +62,8 @@ try {
 const PORT = Number(cfg.port ?? 8787);
 const HOST = cfg.host || '127.0.0.1';
 const UPSTREAM = String(cfg.upstream || 'https://token-plan-cn.xiaomimimo.com/v1').replace(/\/+$/, '');
-const LOG_PATH = process.env.MIMO_PROXY_LOG || path.join(__dirname, 'proxy.log');
+// 日志与配置同目录，保证 CLI（mimodex proxy logs）和代理指向同一个文件
+const LOG_PATH = process.env.MIMO_PROXY_LOG || path.join(path.dirname(CONFIG_PATH), 'proxy.log');
 const DEBUG_DUMP = process.env.DEBUG_DUMP === '1';
 
 const MODEL_MAP = cfg.model_map || {};
