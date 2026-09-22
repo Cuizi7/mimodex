@@ -26,14 +26,17 @@ Reason: Automatic approval review failed: ...
 
 ### 2. 模型映射，无需修改 agents 配置
 
-`~/.codex/agents/*.toml` 中声明的模型名（`gpt-5.6-luna`、`gpt-5.6-terra`、`gpt-6-astra` 等）在 MiMo 上返回 `400 Unsupported model`，explorer / reviewer / implementer 等子代理无法启动。
+`~/.codex/agents/*.toml` 中声明的模型名（`gpt-5.6-luna`、`gpt-5.6-terra`、`gpt-5.6-sol`、`gpt-6-astra` 等）在 MiMo 上返回 `400 Unsupported model`，explorer / reviewer / implementer 等子代理无法启动。
 
 代理在转发时按映射表改写模型名：
 
 ```
-gpt-5.6-luna  → mimo-v2.6-flash
-gpt-5.6-terra → mimo-v2.6-flash
-gpt-6-astra   → mimo-v2.6-pro
+gpt-5.6-luna       → mimo-v2.6-flash
+gpt-5.6-terra      → mimo-v2.6-flash
+gpt-5.6-sol        → mimo-v2.6-pro
+gpt-6-astra        → mimo-v2.6-pro
+codex-auto-review  → mimo-v2.6-flash   # 审查模型
+其他 gpt-*         → mimo-v2.6-pro     # glob 兜底
 ```
 
 因此 agents 配置无需改动，同一份定义可同时用于 OpenAI 与 MiMo 两套后端。
